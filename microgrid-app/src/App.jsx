@@ -1,6 +1,28 @@
 import { useState, useMemo } from "react";
 
 /* ═══════════════════════════════════════════════════════════════
+   COMPONENT LIBRARIES
+═══════════════════════════════════════════════════════════════ */
+const PANELS = [
+  {id:'jinko_400',  name:'Jinko Tiger Neo 400W',   Pmax:400, Voc:48.6, Vmp:40.5, Isc:9.87, Imp:9.38},
+  {id:'rec_405',    name:'REC Alpha 405W',          Pmax:405, Voc:49.9, Vmp:42.1, Isc:9.68, Imp:9.62},
+  {id:'longi_430',  name:'LONGi Hi-MO6 430W',      Pmax:430, Voc:51.4, Vmp:43.5, Isc:10.1, Imp:9.87},
+  {id:'silfab_480', name:'Silfab SIL-480 HJT',     Pmax:480, Voc:52.8, Vmp:44.6, Isc:10.8, Imp:10.4},
+  {id:'qcells_400', name:'Qcells Q.PEAK DUO 400W', Pmax:400, Voc:49.2, Vmp:41.0, Isc:9.75, Imp:9.20},
+  {id:'custom',     name:'⊕ Custom Panel...'},
+];
+
+const BATTERIES = [
+  {id:'pylontech',   name:'Pylontech US5000',       kWh:5.12, dod:0.80, chem:'lfp'},
+  {id:'eg4_life',    name:'EG4 LifePower4',         kWh:5.12, dod:0.80, chem:'lfp'},
+  {id:'eg4_wall',    name:'EG4 WallMount-E 10kWh',  kWh:10.0, dod:0.80, chem:'lfp'},
+  {id:'battleborn',  name:'Battle Born 100Ah LFP',  kWh:1.28, dod:0.80, chem:'lfp'},
+  {id:'trojan_t105', name:'Trojan T-105 FLA 6V',    kWh:1.26, dod:0.40, chem:'fla'},
+  {id:'crown_agm',   name:'Crown CR-235 AGM 6V',    kWh:2.82, dod:0.50, chem:'agm'},
+  {id:'custom',      name:'⊕ Custom Battery...'},
+];
+
+/* ═══════════════════════════════════════════════════════════════
    NEC REFERENCE TABLES & HELPERS
 ═══════════════════════════════════════════════════════════════ */
 const BKRS = [15,20,25,30,35,40,50,60,70,80,90,100,110,125,150,175,200,225,250,300,350,400];
@@ -19,18 +41,15 @@ const wFor  = a => {
 /* ═══════════════════════════════════════════════════════════════
    COLOR / STATUS ENGINE
 ═══════════════════════════════════════════════════════════════ */
-// Line/stroke color (saturated, works on white)
 const uc  = p => p<=0?"#2563eb":p<65?"#16a34a":p<82?"#65a30d":p<95?"#ca8a04":p<108?"#ea580c":"#dc2626";
-// Badge background (light tints for white UI)
 const ubg = p => p<=0?"#eff6ff":p<65?"#f0fdf4":p<82?"#f7fee7":p<95?"#fefce8":p<108?"#fff7ed":"#fef2f2";
-// Status label text
 const ut  = p => p<=0?"IDLE":p<65?"NORMAL":p<82?"RUNNING":p<95?"CAUTION":p<108?"WARNING":"OVERCURRENT!";
 
 /* ═══════════════════════════════════════════════════════════════
    CALCULATION ENGINE  (NEC 430 · 480 · 690 · 310.15)
 ═══════════════════════════════════════════════════════════════ */
 function calcSys(inp) {
-  const {hp, volts, phase, hrs, sun, days, sv, chem} = inp;
+  const {hp, volts, phase, hrs, sun, days, sv, panel, battery} = inp;
   const PH = phase === 3 ? Math.sqrt(3) : 1;
   const EFF = 0.88, PF = 0.85;
 
@@ -44,7 +63,12 @@ function calcSys(inp) {
 
   const kwhD = pKW * hrs;
 
-  const [PW, VOC, VMP, ISC] = [400, 48.6, 40.5, 9.87];
+  const PW  = Math.max(panel.Pmax, 1);
+  const VOC = panel.Voc;
+  const VMP = panel.Vmp;
+  const ISC = panel.Isc;
+  const IMP = panel.Imp;
+
   const needKW = kwhD / (sun * 0.78);
   const numP   = Math.ceil(needKW * 1000 / PW);
   const pvKW   = numP * PW / 1000;
@@ -59,13 +83,15 @@ function calcSys(inp) {
   const dcFuse = nextB(dcCA);
   const dcWire = wFor(dcCA);
 
-  const dod  = chem==='lfp'?0.80:chem==='agm'?0.50:0.40;
-  const bReq = kwhD * days / dod;
-  const bNum = Math.ceil(bReq / 5.12);
-  const bKwh = bNum * 5.12;
-  const bA   = (pKW * 1000 / sv) * 1.1;
-  const bOCP = nextB(bA * 1.25);
-  const bWir = wFor(bA * 1.25);
+  const bModKwh = Math.max(battery.kWh, 0.1);
+  const dod     = battery.dod;
+  const chem    = battery.chem;
+  const bReq    = kwhD * days / dod;
+  const bNum    = Math.ceil(bReq / bModKwh);
+  const bKwh    = bNum * bModKwh;
+  const bA      = (pKW * 1000 / sv) * 1.1;
+  const bOCP    = nextB(bA * 1.25);
+  const bWir    = wFor(bA * 1.25);
 
   const minKW  = Math.max(pKW / 0.80, surgeKW / 2.5);
   const invKW  = [3,5,8,10,12,15,20,25,30].find(s => s >= minKW) || 30;
@@ -93,7 +119,7 @@ function calcSys(inp) {
     warns.push(`⚠ Large battery bank — confirm BMS communications and string balancing`);
 
   return {flc,lrc,pKW,surgeKW,mCA,mOCPD,mWire,kwhD,needKW,numP,pvKW,pps,strs,
-          VOC,VMP,ISC,PW,pvCA,pvFuse,pvWire,dcBA,dcCA,dcFuse,dcWire,dod,bReq,
+          VOC,VMP,ISC,IMP,PW,pvCA,pvFuse,pvWire,dcBA,dcCA,dcFuse,dcWire,dod,chem,bModKwh,bReq,
           bNum,bKwh,bA,bOCP,bWir,invKW,invAC,invOCP,invWir,minKW,pvU,dcU,bU,acU,mU,cc,warns};
 }
 
@@ -158,6 +184,32 @@ const FlowArrow = ({x,y,dx,dy,color}) => {
     fill={color}/>;
 };
 
+const UtilityGridSym = ({x, y, color}) => (
+  <g>
+    <text x={x} y={y-14} textAnchor="middle" fill={color} fontSize={6} letterSpacing={1} fontWeight="bold">&#9889; UTILITY</text>
+    <text x={x} y={y-6} textAnchor="middle" fill={color} fontSize={5.5} letterSpacing={1}>GRID TIE</text>
+    <line x1={x} y1={y} x2={x} y2={y+22} stroke={color} strokeWidth={2.5}/>
+    <line x1={x-16} y1={y+6} x2={x+16} y2={y+6} stroke={color} strokeWidth={2}/>
+    <line x1={x-14} y1={y+6} x2={x-14} y2={y+14} stroke={color} strokeWidth={1.5}/>
+    <line x1={x+14} y1={y+6} x2={x+14} y2={y+14} stroke={color} strokeWidth={1.5}/>
+    <circle cx={x-14} cy={y+16} r={2.5} fill="none" stroke={color} strokeWidth={1.5}/>
+    <circle cx={x+14} cy={y+16} r={2.5} fill="none" stroke={color} strokeWidth={1.5}/>
+  </g>
+);
+
+const TransferSwitchSym = ({x, y, color, open}) => (
+  <g>
+    <rect x={x-14} y={y-12} width={28} height={24} rx={3} fill="#ffffff" stroke={color} strokeWidth={1.5}/>
+    <text x={x} y={y-3} textAnchor="middle" fill={color} fontSize={5.5} fontWeight="bold">TS</text>
+    {open
+      ? <line x1={x-7} y1={y+7} x2={x+7} y2={y+2} stroke={color} strokeWidth={2}/>
+      : <line x1={x-7} y1={y+5} x2={x+7} y2={y+5} stroke={color} strokeWidth={2}/>
+    }
+    <circle cx={x-7} cy={open ? y+7 : y+5} r={2} fill={color}/>
+    <circle cx={x+7} cy={open ? y+2 : y+5} r={2} fill={color}/>
+  </g>
+);
+
 /* ═══════════════════════════════════════════════════════════════
    ONE-LINE DIAGRAM  (SVG — light mode)
 ═══════════════════════════════════════════════════════════════ */
@@ -178,37 +230,47 @@ function OneDiagram({calc, disp, inp}) {
   const BX=46, BD_Y=360, BTKR_Y=385, BT=412, BB=545, BW=60;
   const AX=530, ABK_Y=355, APT=405, APB=458, PBKY=490, MCY=558, MR=32;
 
+  // Grid column constants
+  const GRID_X = 628;
+  const GRID_TOP_Y = 32;
+  const GRID_TS_Y = 372;
+  const GRID_BOT_Y = APT;
+
+  const gridColor = disp.gridDown ? '#dc2626' : '#64748b';
+  const gridDash  = disp.gridDown ? "7,5" : undefined;
+  const gridOpacity = disp.gridDown ? 1 : 0.55;
+
   const panLabel = s => {
     const active = strs >= s;
     const cnt    = active ? (s===strs ? numP-(s-1)*pps : pps) : pps;
     const panels = Math.min(Math.max(cnt,1), pps);
     return {
-      s1: active ? `STR-${s}: ${panels}×400W` : `STR-${s}`,
-      s2: active ? `${(VOC*panels).toFixed(0)}Voc · ${ISC.toFixed(1)}Isc` : `(unused)`,
+      s1: active ? `STR-${s}: ${panels}\xd7${calc.PW}W` : `STR-${s}`,
+      s2: active ? `${(VOC*panels).toFixed(0)}Voc \xb7 ${ISC.toFixed(1)}Isc` : `(unused)`,
       dim: !active
     };
   };
 
   return (
-    <svg viewBox="0 0 580 690" style={{width:'100%',maxWidth:620,display:'block',
+    <svg viewBox="0 0 680 720" style={{width:'100%',maxWidth:720,display:'block',
       fontFamily:"'Space Mono','Courier New',monospace",
       filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.08))'}}>
 
       {/* White background with light grid */}
-      <rect width={580} height={690} fill="#f8fafc" rx={6}/>
-      {Array.from({length:21},(_,i)=>(
-        <line key={`gr${i}`} x1={0} y1={i*33} x2={580} y2={i*33} stroke="#e8eef4" strokeWidth={0.5}/>
+      <rect width={680} height={720} fill="#f8fafc" rx={6}/>
+      {Array.from({length:22},(_,i)=>(
+        <line key={`gr${i}`} x1={0} y1={i*33} x2={680} y2={i*33} stroke="#e8eef4" strokeWidth={0.5}/>
       ))}
-      {Array.from({length:15},(_,i)=>(
-        <line key={`gc${i}`} x1={i*40} y1={0} x2={i*40} y2={690} stroke="#e8eef4" strokeWidth={0.5}/>
+      {Array.from({length:18},(_,i)=>(
+        <line key={`gc${i}`} x1={i*40} y1={0} x2={i*40} y2={720} stroke="#e8eef4" strokeWidth={0.5}/>
       ))}
 
       {/* Header */}
-      <text x={290} y={17} textAnchor="middle" fill="#94a3b8" fontSize={8} letterSpacing={3}>
+      <text x={340} y={17} textAnchor="middle" fill="#94a3b8" fontSize={8} letterSpacing={3}>
         ONE-LINE DIAGRAM — MICROGRID / WELL PUMP SYSTEM — NEC COMPLIANT
       </text>
-      <text x={290} y={26} textAnchor="middle" fill="#94a3b8" fontSize={7}>
-        PV GENERATION — {numP}×400W = {pvKW.toFixed(2)} kW  ·  {strs} strings × {pps} panels
+      <text x={340} y={26} textAnchor="middle" fill="#94a3b8" fontSize={7}>
+        PV GENERATION — {numP}\xd7{calc.PW}W = {pvKW.toFixed(2)} kW  \xb7  {strs} strings \xd7 {pps} panels
       </text>
 
       {/* ─── SOLAR PANELS ─── */}
@@ -257,7 +319,7 @@ function OneDiagram({calc, disp, inp}) {
         HYBRID INVERTER / CHARGER
       </text>
       <text x={ICX} y={IT+32} textAnchor="middle" fill="#64748b" fontSize={7.5}>
-        Integrated MPPT  ·  {invKW} kW Rated  ·  Pure Sine  ·  VFD Compatible
+        Integrated MPPT  \xb7  {invKW} kW Rated  \xb7  Pure Sine  \xb7  VFD Compatible
       </text>
       {/* Zone dividers */}
       <line x1={IL+120} y1={IT+38} x2={IL+120} y2={IB} stroke="#bfdbfe" strokeWidth={1}/>
@@ -270,10 +332,10 @@ function OneDiagram({calc, disp, inp}) {
       <text x={IR-60} y={IT+52} textAnchor="middle" fill="#c2410c" fontSize={7.5} fontWeight="bold">AC OUTPUT</text>
       <text x={IR-60} y={IT+63} textAnchor="middle" fill="#64748b" fontSize={6.5}>240 V / 1φ  {invAC.toFixed(1)} A</text>
       <text x={ICX} y={IT+82} textAnchor="middle" fill="#94a3b8" fontSize={7}>
-        Surge: {(invKW*2.5).toFixed(0)} kW  ·  Eff ≥ 96%  ·  Anti-Island  ·  Generator Input  ·  AGS
+        Surge: {(invKW*2.5).toFixed(0)} kW  \xb7  Eff ≥ 96%  \xb7  Anti-Island  \xb7  Generator Input  \xb7  AGS
       </text>
       <text x={ICX} y={IT+95} textAnchor="middle" fill="#94a3b8" fontSize={7}>
-        AC OCPD: {invOCP} A  ·  Suggested: Victron · Sol-Ark · Schneider XW+ · Growatt SPF
+        AC OCPD: {invOCP} A  \xb7  Suggested: Victron \xb7 Sol-Ark \xb7 Schneider XW+ \xb7 Growatt SPF
       </text>
 
       {/* ─── BATTERY BRANCH (left) ─── */}
@@ -298,7 +360,7 @@ function OneDiagram({calc, disp, inp}) {
       })}
       <text x={BX} y={BT+(BB-BT)/2-10} textAnchor="middle" fill={bC} fontSize={8} fontWeight="bold">BATTERY</text>
       <text x={BX} y={BT+(BB-BT)/2+3} textAnchor="middle" fill={bC} fontSize={7.5}>{bKwh.toFixed(1)} kWh</text>
-      <text x={BX} y={BT+(BB-BT)/2+16} textAnchor="middle" fill={bC} fontSize={6.5}>{bNum}×48V LFP</text>
+      <text x={BX} y={BT+(BB-BT)/2+16} textAnchor="middle" fill={bC} fontSize={6.5}>{bNum}\xd7{inp.sv}V {calc.chem.toUpperCase()}</text>
       <GndSym x={BX} y={BB+2}/>
       <text x={BX} y={BB+24} textAnchor="middle" fill="#94a3b8" fontSize={6}>SYS NEG / GND</text>
 
@@ -318,7 +380,7 @@ function OneDiagram({calc, disp, inp}) {
       <rect x={AX-34} y={APT} width={68} height={18} rx={2} fill={`${acC}20`}/>
       <text x={AX} y={APT+13} textAnchor="middle" fill={acC} fontSize={8} fontWeight="bold">AC PANEL</text>
       <text x={AX} y={APT+28} textAnchor="middle" fill="#64748b" fontSize={7}>240 V / 1φ</text>
-      <text x={AX} y={APT+39} textAnchor="middle" fill="#64748b" fontSize={6.5}>60 Hz · {invOCP}A</text>
+      <text x={AX} y={APT+39} textAnchor="middle" fill="#64748b" fontSize={6.5}>60 Hz \xb7 {invOCP}A</text>
       <text x={AX} y={APT+50} textAnchor="middle" fill="#94a3b8" fontSize={6}>NEC Art. 240</text>
 
       {/* Pump breaker + motor */}
@@ -333,7 +395,7 @@ function OneDiagram({calc, disp, inp}) {
       <circle cx={AX} cy={MCY} r={MR} fill="#fefce8" stroke={mC} strokeWidth={2}/>
       <circle cx={AX} cy={MCY} r={MR*0.82} fill="none" stroke={mC} strokeWidth={0.5} opacity={0.4}/>
       <text x={AX} y={MCY-5} textAnchor="middle" fill={mC} fontSize={15} fontWeight="bold">M</text>
-      <text x={AX} y={MCY+9} textAnchor="middle" fill={mC} fontSize={7}>{inp.hp}HP · {inp.volts}V/{inp.phase}φ</text>
+      <text x={AX} y={MCY+9} textAnchor="middle" fill={mC} fontSize={7}>{inp.hp}HP \xb7 {inp.volts}V/{inp.phase}φ</text>
       <text x={AX} y={MCY+20} textAnchor="middle" fill={mC} fontSize={6.5}>FLC:{flc.toFixed(1)}A  LRC:{calc.lrc.toFixed(1)}A</text>
       <text x={AX} y={MCY-MR-8} textAnchor="middle" fill="#64748b" fontSize={7} fontWeight="bold">SUBMERSIBLE WELL PUMP</text>
       <GndSym x={AX} y={MCY+MR+2}/>
@@ -343,29 +405,58 @@ function OneDiagram({calc, disp, inp}) {
       <GndSym x={ICX} y={IB+20}/>
       <text x={ICX+18} y={IB+32} fill="#94a3b8" fontSize={6}>CHASSIS GND</text>
 
+      {/* ─── UTILITY GRID CONNECTION (right column) ─── */}
+      <UtilityGridSym x={GRID_X} y={GRID_TOP_Y+16} color={gridColor}/>
+      <line x1={GRID_X} y1={GRID_TOP_Y+38} x2={GRID_X} y2={GRID_TS_Y-13}
+        stroke={gridColor} strokeWidth={2} strokeDasharray={gridDash} opacity={gridOpacity}/>
+      <TransferSwitchSym x={GRID_X} y={GRID_TS_Y} color={gridColor} open={disp.gridDown}/>
+      <line x1={GRID_X} y1={GRID_TS_Y+13} x2={GRID_X} y2={GRID_BOT_Y+9}
+        stroke={gridColor} strokeWidth={2} strokeDasharray={gridDash} opacity={gridOpacity}/>
+      <line x1={GRID_X} y1={GRID_BOT_Y+9} x2={AX+35} y2={GRID_BOT_Y+9}
+        stroke={gridColor} strokeWidth={2} strokeDasharray={gridDash} opacity={gridOpacity}/>
+      {!disp.gridDown && (
+        <text x={(GRID_X+AX+35)/2} y={GRID_BOT_Y+6} textAnchor="middle" fill="#94a3b8" fontSize={6}>GRID BACKUP</text>
+      )}
+
+      {/* Grid failure overlays */}
+      {disp.gridDown && <>
+        <line x1={GRID_X-10} y1={GRID_TS_Y-8} x2={GRID_X+10} y2={GRID_TS_Y+8} stroke="#dc2626" strokeWidth={2.5}/>
+        <line x1={GRID_X+10} y1={GRID_TS_Y-8} x2={GRID_X-10} y2={GRID_TS_Y+8} stroke="#dc2626" strokeWidth={2.5}/>
+        <rect x={GRID_X-26} y={GRID_TOP_Y+38} width={52} height={15} rx={3} fill="#fef2f2" stroke="#dc2626" strokeWidth={1}/>
+        <text x={GRID_X} y={GRID_TOP_Y+49} textAnchor="middle" fill="#dc2626" fontSize={7} fontWeight="bold">GRID FAULT</text>
+        <rect x={BX-40} y={ICY-24} width={80} height={13} rx={3} fill="#fef2f2" stroke="#dc2626" strokeWidth={1}/>
+        <text x={BX} y={ICY-14} textAnchor="middle" fill="#dc2626" fontSize={6.5} fontWeight="bold">&#9889; PRIMARY SOURCE</text>
+      </>}
+
       {/* ─── STATUS BADGES ─── */}
       {[
-        {label:'PV ARRAY', pct:disp.pvU, cx:55},
-        {label:'DC BUS',   pct:disp.dcU, cx:163},
-        {label:'BATTERY',  pct:disp.bU,  cx:290},
-        {label:'AC OUT',   pct:disp.acU, cx:417},
-        {label:'PUMP MTR', pct:disp.mU,  cx:525},
-      ].map(({label,pct,cx}) => (
-        <g key={label}>
-          <rect x={cx-50} y={647} width={100} height={36} rx={3}
-            fill={ubg(pct)} stroke={uc(pct)} strokeWidth={1.5}/>
-          <text x={cx} y={660} textAnchor="middle" fill={uc(pct)} fontSize={7} fontWeight="bold">{label}</text>
-          <text x={cx} y={672} textAnchor="middle" fill={uc(pct)} fontSize={8} fontWeight="bold">{ut(pct)}</text>
-          <text x={cx} y={680} textAnchor="middle" fill={uc(pct)} fontSize={6}>{pct<=0?'---':`${pct.toFixed(0)}%`}</text>
-        </g>
-      ))}
+        {label:'PV ARRAY', pct:disp.pvU, cx:95},
+        {label:'DC BUS',   pct:disp.dcU, cx:193},
+        {label:'BATTERY',  pct:disp.bU,  cx:291},
+        {label:'AC OUT',   pct:disp.acU, cx:389},
+        {label:'PUMP MTR', pct:disp.mU,  cx:487},
+        {label:'GRID',     pct:disp.gridDown ? 120 : 30, cx:585},
+      ].map(({label,pct,cx}) => {
+        const isGrid = label === 'GRID';
+        const displayText = isGrid ? (disp.gridDown ? 'FAULT' : 'CONNECTED') : ut(pct);
+        const pctText = isGrid ? (disp.gridDown ? '---' : 'OK') : (pct<=0?'---':`${pct.toFixed(0)}%`);
+        return (
+          <g key={label}>
+            <rect x={cx-45} y={678} width={90} height={36} rx={3}
+              fill={ubg(pct)} stroke={uc(pct)} strokeWidth={1.5}/>
+            <text x={cx} y={691} textAnchor="middle" fill={uc(pct)} fontSize={7} fontWeight="bold">{label}</text>
+            <text x={cx} y={703} textAnchor="middle" fill={uc(pct)} fontSize={7.5} fontWeight="bold">{displayText}</text>
+            <text x={cx} y={711} textAnchor="middle" fill={uc(pct)} fontSize={6}>{pctText}</text>
+          </g>
+        );
+      })}
 
       {/* Legend */}
-      <text x={8} y={643} fill="#94a3b8" fontSize={6.5} fontWeight="bold">STATUS:</text>
+      <text x={8} y={674} fill="#94a3b8" fontSize={6.5} fontWeight="bold">STATUS:</text>
       {[['IDLE','#2563eb'],['NORMAL','#16a34a'],['CAUTION','#ca8a04'],['WARNING','#ea580c'],['OC!','#dc2626']].map(([l,c],i)=>(
         <g key={c}>
-          <rect x={50+i*48} y={635} width={9} height={9} rx={2} fill={c}/>
-          <text x={62+i*48} y={643} fill="#64748b" fontSize={6.5}>{l}</text>
+          <rect x={50+i*52} y={666} width={9} height={9} rx={2} fill={c}/>
+          <text x={62+i*52} y={674} fill="#64748b" fontSize={6.5}>{l}</text>
         </g>
       ))}
     </svg>
@@ -385,12 +476,13 @@ const Sl = {
   val: {float:'right', color:'#1d4ed8', fontWeight:'bold'},
 };
 
-function InputPanel({inp, upd}) {
+function InputPanel({inp, upd, panelId, setPanelId, customPanel, setCustomPanel,
+                     batteryId, setBatteryId, customBattery, setCustomBattery, activePanel, activeBattery}) {
   return (
     <div style={{padding:'8px 12px'}}>
       <div style={{fontSize:9,color:'#1d4ed8',letterSpacing:3,textAlign:'center',marginBottom:10,
                    borderBottom:'1px solid #e2e8f0',paddingBottom:8,fontWeight:'bold'}}>
-        ⚙ SYSTEM INPUTS
+        &#9881; SYSTEM INPUTS
       </div>
 
       <div style={Sl.sec}>PUMP LOAD</div>
@@ -441,7 +533,86 @@ function InputPanel({inp, upd}) {
         </div>
       </div>
 
+      <div style={Sl.sec}>SOLAR PANELS</div>
+
+      <div style={Sl.row}>
+        <label style={Sl.lbl}>Panel Model</label>
+        <select style={Sl.sel} value={panelId} onChange={e => setPanelId(e.target.value)}>
+          {PANELS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        {panelId !== 'custom' && activePanel && (
+          <div style={{fontSize:7, color:'#64748b', marginTop:4, lineHeight:1.6}}>
+            Pmax: {activePanel.Pmax}W \xb7 Voc: {activePanel.Voc}V \xb7 Vmp: {activePanel.Vmp}V<br/>
+            Isc: {activePanel.Isc}A \xb7 Imp: {activePanel.Imp}A
+          </div>
+        )}
+        {panelId === 'custom' && (
+          <div style={{marginTop:6, border:'1px solid #dbeafe', borderRadius:4, padding:'6px 8px', background:'#eff6ff'}}>
+            <div style={{fontSize:7, color:'#1d4ed8', fontWeight:'bold', marginBottom:4, letterSpacing:1}}>NAMEPLATE DATA</div>
+            {[
+              {key:'Pmax', label:'Max Power (W)',        step:1,    min:1},
+              {key:'Voc',  label:'Open Circuit V (Voc)', step:0.1,  min:0.1},
+              {key:'Vmp',  label:'Max Power V (Vmp)',    step:0.1,  min:0.1},
+              {key:'Isc',  label:'Short Circuit A (Isc)',step:0.01, min:0.01},
+              {key:'Imp',  label:'Max Power A (Imp)',    step:0.01, min:0.01},
+            ].map(({key, label, step, min}) => (
+              <div key={key} style={{marginBottom:5}}>
+                <label style={{...Sl.lbl, marginBottom:1}}>{label}</label>
+                <input type="number" step={step} min={min}
+                  value={customPanel[key]}
+                  onChange={e => setCustomPanel(p => ({...p, [key]: +e.target.value}))}
+                  style={{width:'100%', padding:'3px 7px', borderRadius:3, border:'1px solid #bfdbfe',
+                          background:'#ffffff', color:'#1e293b', fontSize:10, fontFamily:'inherit', outline:'none'}}/>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div style={Sl.sec}>BATTERY STORAGE</div>
+
+      <div style={Sl.row}>
+        <label style={Sl.lbl}>Battery Module</label>
+        <select style={Sl.sel} value={batteryId} onChange={e => setBatteryId(e.target.value)}>
+          {BATTERIES.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        {batteryId !== 'custom' && activeBattery && (
+          <div style={{fontSize:7, color:'#64748b', marginTop:4, lineHeight:1.6}}>
+            {activeBattery.kWh} kWh \xb7 DoD: {(activeBattery.dod*100).toFixed(0)}% \xb7 {activeBattery.chem.toUpperCase()}
+          </div>
+        )}
+        {batteryId === 'custom' && (
+          <div style={{marginTop:6, border:'1px solid #dcfce7', borderRadius:4, padding:'6px 8px', background:'#f0fdf4'}}>
+            <div style={{fontSize:7, color:'#16a34a', fontWeight:'bold', marginBottom:4, letterSpacing:1}}>NAMEPLATE DATA</div>
+            <div style={{marginBottom:5}}>
+              <label style={{...Sl.lbl, marginBottom:1}}>Module kWh</label>
+              <input type="number" step={0.01} min={0.1}
+                value={customBattery.kWh}
+                onChange={e => setCustomBattery(p => ({...p, kWh: +e.target.value}))}
+                style={{width:'100%', padding:'3px 7px', borderRadius:3, border:'1px solid #bbf7d0',
+                        background:'#ffffff', color:'#1e293b', fontSize:10, fontFamily:'inherit', outline:'none'}}/>
+            </div>
+            <div style={{marginBottom:5}}>
+              <label style={{...Sl.lbl, marginBottom:1}}>Depth of Discharge (%)</label>
+              <input type="number" step={1} min={10} max={100}
+                value={Math.round(customBattery.dod*100)}
+                onChange={e => setCustomBattery(p => ({...p, dod: +e.target.value/100}))}
+                style={{width:'100%', padding:'3px 7px', borderRadius:3, border:'1px solid #bbf7d0',
+                        background:'#ffffff', color:'#1e293b', fontSize:10, fontFamily:'inherit', outline:'none'}}/>
+            </div>
+            <div style={{marginBottom:2}}>
+              <label style={{...Sl.lbl, marginBottom:1}}>Chemistry</label>
+              <select style={{...Sl.sel, border:'1px solid #bbf7d0'}}
+                value={customBattery.chem}
+                onChange={e => setCustomBattery(p => ({...p, chem: e.target.value}))}>
+                <option value="lfp">LiFePO4 (LFP)</option>
+                <option value="agm">AGM Lead Acid</option>
+                <option value="fla">Flooded Lead Acid</option>
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={Sl.row}>
         <label style={Sl.lbl}>Autonomy <span style={Sl.val}>{inp.days} day{inp.days!==1?'s':''}</span></label>
@@ -452,19 +623,14 @@ function InputPanel({inp, upd}) {
         </div>
       </div>
 
-      <div style={Sl.row}>
-        <label style={Sl.lbl}>Battery Chemistry</label>
-        <select style={Sl.sel} value={inp.chem} onChange={e=>upd('chem',e.target.value)}>
-          <option value="lfp">LiFePO4 (LFP) — Recommended</option>
-          <option value="agm">AGM Lead Acid</option>
-          <option value="fla">Flooded Lead Acid</option>
-        </select>
-        <div style={{fontSize:7.5,color:'#64748b',marginTop:4}}>
-          {inp.chem==='lfp'?'DoD: 80% · 3000+ cycles · no maintenance':
-           inp.chem==='agm'?'DoD: 50% · 500–800 cycles · sealed':
-           'DoD: 40% · 300–500 cycles · vented enclosure reqd'}
+      {/* Chemistry info blurb from active battery */}
+      {activeBattery && (
+        <div style={{fontSize:7.5,color:'#64748b',marginTop:4,marginBottom:8}}>
+          {activeBattery.chem==='lfp'?'DoD: 80% \xb7 3000+ cycles \xb7 no maintenance':
+           activeBattery.chem==='agm'?'DoD: 50% \xb7 500–800 cycles \xb7 sealed':
+           'DoD: 40% \xb7 300–500 cycles \xb7 vented enclosure reqd'}
         </div>
-      </div>
+      )}
 
       <div style={Sl.sec}>SYSTEM CONFIG</div>
 
@@ -478,9 +644,9 @@ function InputPanel({inp, upd}) {
 
       <div style={{marginTop:16,padding:'8px 10px',background:'#f1f5f9',borderRadius:4,
                    border:'1px solid #e2e8f0',fontSize:7.5,color:'#64748b',lineHeight:1.7}}>
-        NEC 690 (PV) · NEC 480 (Battery)<br/>
-        NEC 430 (Motor) · NEC 310.15 (Wire)<br/>
-        Cu conductors · 75°C · in conduit<br/>
+        NEC 690 (PV) \xb7 NEC 480 (Battery)<br/>
+        NEC 430 (Motor) \xb7 NEC 310.15 (Wire)<br/>
+        Cu conductors \xb7 75\xb0C \xb7 in conduit<br/>
         Values are design minimums. Verify with AHJ.
       </div>
     </div>
@@ -514,16 +680,16 @@ function Sec({title, color="#2563eb", children}) {
   );
 }
 
-function SpecsPanel({calc, inp}) {
+function SpecsPanel({calc, inp, panelName, batteryName}) {
   const {flc,lrc,pKW,surgeKW,mCA,mOCPD,mWire,kwhD,needKW,numP,pvKW,strs,pps,
-         ISC,VOC,VMP,pvFuse,pvWire,dcFuse,dcWire,dcBA,bNum,bKwh,bReq,bA,bOCP,bWir,
-         invKW,invAC,invOCP,invWir,minKW,cc,warns,dod} = calc;
+         ISC,VOC,VMP,IMP,PW,pvFuse,pvWire,dcFuse,dcWire,dcBA,bNum,bKwh,bReq,bA,bOCP,bWir,
+         invKW,invAC,invOCP,invWir,minKW,cc,warns,dod,chem,bModKwh} = calc;
 
   return (
     <div style={{padding:'6px 10px',fontSize:10}}>
       <div style={{fontSize:9,color:'#1d4ed8',letterSpacing:3,textAlign:'center',marginBottom:10,
                    borderBottom:'1px solid #e2e8f0',paddingBottom:8,fontWeight:'bold'}}>
-        📋 SYSTEM SPECIFICATIONS
+        SYSTEM SPECIFICATIONS
       </div>
 
       {warns.length > 0 && (
@@ -534,44 +700,46 @@ function SpecsPanel({calc, inp}) {
         </div>
       )}
 
-      <Sec title="⚡ PUMP MOTOR — NEC ART. 430" color="#ea580c">
+      <Sec title="PUMP MOTOR — NEC ART. 430" color="#ea580c">
         <SR label="Rating"         value={`${inp.hp} HP / ${inp.volts}V / ${inp.phase}φ`} color="#334155"/>
         <SR label="Shaft Power"    value={`${pKW.toFixed(2)} kW`} color="#334155"/>
         <SR label="FLC (Running)"  value={`${flc.toFixed(1)} A`}  color="#16a34a"/>
-        <SR label="LRC (Starting)" value={`${lrc.toFixed(1)} A`}  color="#ea580c" sub="6.5 × FLC — locked rotor"/>
+        <SR label="LRC (Starting)" value={`${lrc.toFixed(1)} A`}  color="#ea580c" sub="6.5 \xd7 FLC — locked rotor"/>
         <SR label="Surge Demand"   value={`${surgeKW.toFixed(1)} kW`} color="#ca8a04"/>
-        <SR label="Daily Energy"   value={`${kwhD.toFixed(2)} kWh/day`} sub={`${inp.hrs}h × ${pKW.toFixed(2)}kW`} color="#334155"/>
+        <SR label="Daily Energy"   value={`${kwhD.toFixed(2)} kWh/day`} sub={`${inp.hrs}h \xd7 ${pKW.toFixed(2)}kW`} color="#334155"/>
         <SR label="Branch Wire"    value={mWire}   sub={`${mCA.toFixed(1)} A (125% FLC)`} color="#334155"/>
         <SR label="Motor OCPD"     value={`${mOCPD} A CB`} sub="250% FLC — NEC 430.52" color="#334155"/>
       </Sec>
 
-      <Sec title="☀ PV ARRAY — NEC ART. 690" color="#d97706">
-        <SR label="Required Array"  value={`${needKW.toFixed(2)} kW`} sub={`${kwhD.toFixed(2)} kWh ÷ ${inp.sun} PSH × 0.78`} color="#334155"/>
-        <SR label="Installed Array" value={`${pvKW.toFixed(2)} kW`}  color="#16a34a" sub={`${numP} × 400 W panels`}/>
-        <SR label="String Config"   value={`${strs} × ${pps} panels`} sub={`${(VOC*pps).toFixed(0)}Voc · ${(40.5*pps).toFixed(0)}Vmp per string`} color="#334155"/>
+      <Sec title="PV ARRAY — NEC ART. 690" color="#d97706">
+        <SR label="Panel Model"     value={panelName} color="#334155"/>
+        <SR label="Required Array"  value={`${needKW.toFixed(2)} kW`} sub={`${kwhD.toFixed(2)} kWh \xf7 ${inp.sun} PSH \xd7 0.78`} color="#334155"/>
+        <SR label="Installed Array" value={`${pvKW.toFixed(2)} kW`}  color="#16a34a" sub={`${numP} \xd7 ${PW} W panels`}/>
+        <SR label="String Config"   value={`${strs} \xd7 ${pps} panels`} sub={`${(VOC*pps).toFixed(0)}Voc \xb7 ${(VMP*pps).toFixed(0)}Vmp per string`} color="#334155"/>
         <SR label="Voc / Vmp"       value={`${VOC} V / ${VMP} V`} sub="per panel" color="#334155"/>
-        <SR label="Isc / Imp"       value={`${ISC} A / 9.38 A`} sub="per panel" color="#334155"/>
-        <SR label="String Fuse"     value={`${pvFuse} A`} sub="1.56 × Isc — NEC 690.8" color="#334155"/>
+        <SR label="Isc / Imp"       value={`${ISC} A / ${IMP} A`} sub="per panel" color="#334155"/>
+        <SR label="String Fuse"     value={`${pvFuse} A`} sub="1.56 \xd7 Isc — NEC 690.8" color="#334155"/>
         <SR label="String Wire"     value={pvWire} sub={`${calc.pvCA.toFixed(1)} A (156% Isc)`} color="#334155"/>
         <SR label="DC Bus Current"  value={`${dcBA.toFixed(1)} A`} color="#334155"/>
         <SR label="DC Bus Fuse"     value={`${dcFuse} A`} color="#334155"/>
         <SR label="DC Bus Wire"     value={dcWire} sub={`${calc.dcCA.toFixed(1)} A`} color="#334155"/>
       </Sec>
 
-      <Sec title="🔋 BATTERY BANK — NEC ART. 480" color="#16a34a">
-        <SR label="Required"        value={`${bReq.toFixed(1)} kWh`} sub={`${kwhD.toFixed(2)} × ${inp.days}d ÷ ${dod}`} color="#334155"/>
-        <SR label="Installed"       value={`${bKwh.toFixed(1)} kWh`} color="#16a34a" sub={`${bNum} × 5.12 kWh modules`}/>
-        <SR label="Module Type"     value="LFP 48 V" sub="e.g. Pylontech US5000 / REC Alpha" color="#334155"/>
+      <Sec title="BATTERY BANK — NEC ART. 480" color="#16a34a">
+        <SR label="Module"          value={batteryName} color="#334155"/>
+        <SR label="Required"        value={`${bReq.toFixed(1)} kWh`} sub={`${kwhD.toFixed(2)} \xd7 ${inp.days}d \xf7 ${dod}`} color="#334155"/>
+        <SR label="Installed"       value={`${bKwh.toFixed(1)} kWh`} color="#16a34a" sub={`${bNum} \xd7 ${bModKwh} kWh modules`}/>
+        <SR label="Chemistry"       value={chem.toUpperCase()} sub={chem==='lfp'?'LiFePO4 — Recommended':chem==='agm'?'AGM Lead Acid':'Flooded Lead Acid'} color="#334155"/>
         <SR label="Max Discharge"   value={`${bA.toFixed(1)} A DC`} sub={`at ${inp.sv}V bus (+10% headroom)`} color="#334155"/>
-        <SR label="Battery OCPD"    value={`${bOCP} A`} sub="1.25 × discharge — NEC 480" color="#334155"/>
+        <SR label="Battery OCPD"    value={`${bOCP} A`} sub="1.25 \xd7 discharge — NEC 480" color="#334155"/>
         <SR label="Battery Wire"    value={bWir} color="#334155"/>
         <SR label="Depth of Disch." value={`${(dod*100).toFixed(0)}%`}
-          sub={inp.chem==='lfp'?'3000+ cycle life':'Reduced — consider LFP upgrade'}
+          sub={chem==='lfp'?'3000+ cycle life':'Reduced — consider LFP upgrade'}
           color="#334155"
-          warn={inp.chem!=='lfp'?'↑ More modules needed vs LFP':undefined}/>
+          warn={chem!=='lfp'?'↑ More modules needed vs LFP':undefined}/>
       </Sec>
 
-      <Sec title="⚙ HYBRID INVERTER — NEC ART. 705" color="#2563eb">
+      <Sec title="HYBRID INVERTER — NEC ART. 705" color="#2563eb">
         <SR label="Min. Required"   value={`${minKW.toFixed(1)} kW`} sub="Motor surge + 80% rule" color="#334155"/>
         <SR label="Selected Size"   value={`${invKW} kW`} color="#16a34a" sub="Standard inverter unit"/>
         <SR label="Surge Rating"    value={`${(invKW*2.5).toFixed(0)} kW`} sub="Handles motor LRC at start" color="#334155"/>
@@ -582,22 +750,22 @@ function SpecsPanel({calc, inp}) {
         <SR label="Batt Voltage"    value={`${inp.sv} V DC bus`} color="#334155"/>
       </Sec>
 
-      <Sec title="📐 WIRE SCHEDULE" color="#0284c7">
+      <Sec title="WIRE SCHEDULE" color="#0284c7">
         {[
-          ['PV String Circuit',  pvWire, `NEC 690.8 · ${calc.pvCA.toFixed(1)} A`],
-          ['DC Combiner → Inv.', dcWire, `NEC 690.8 · ${calc.dcCA.toFixed(1)} A`],
-          ['Battery ↔ Inv.',     bWir,   `NEC 480 · ${(bA*1.25).toFixed(1)} A`],
-          ['Inv. AC Output',     invWir, `NEC 310.15 · ${invAC.toFixed(1)} A`],
-          ['Motor Branch',       mWire,  `NEC 430 · ${mCA.toFixed(1)} A`],
+          ['PV String Circuit',  pvWire, `NEC 690.8 \xb7 ${calc.pvCA.toFixed(1)} A`],
+          ['DC Combiner → Inv.', dcWire, `NEC 690.8 \xb7 ${calc.dcCA.toFixed(1)} A`],
+          ['Battery ↔ Inv.',     bWir,   `NEC 480 \xb7 ${(bA*1.25).toFixed(1)} A`],
+          ['Inv. AC Output',     invWir, `NEC 310.15 \xb7 ${invAC.toFixed(1)} A`],
+          ['Motor Branch',       mWire,  `NEC 430 \xb7 ${mCA.toFixed(1)} A`],
         ].map(([l,v,s])=><SR key={l} label={l} value={v} sub={s} color="#0284c7"/>)}
         <div style={{fontSize:7,color:'#94a3b8',marginTop:5}}>
-          Copper · THWN-2 or USE-2 · 75°C · In conduit · NEC Table 310.15
+          Copper \xb7 THWN-2 or USE-2 \xb7 75\xb0C \xb7 In conduit \xb7 NEC Table 310.15
         </div>
       </Sec>
 
-      <Sec title="💰 COST ESTIMATE (ROM)" color="#7c3aed">
+      <Sec title="COST ESTIMATE (ROM)" color="#7c3aed">
         <SR label="PV Panels + Racking" value={`$${cc.pv.toLocaleString()}`}   sub={`${numP} panels @ ~$0.80/W`} color="#334155"/>
-        <SR label="Battery Modules"      value={`$${cc.batt.toLocaleString()}`} sub={`${bNum} × ~$1,100/mod`} color="#334155"/>
+        <SR label="Battery Modules"      value={`$${cc.batt.toLocaleString()}`} sub={`${bNum} \xd7 ~$1,100/mod`} color="#334155"/>
         <SR label="Inverter / Charger"   value={`$${cc.inv.toLocaleString()}`} color="#334155"/>
         <SR label="Wiring & Conduit"     value={`$${cc.wire.toLocaleString()}`} color="#334155"/>
         <SR label="Disconnects / Misc"   value={`$${cc.misc.toLocaleString()}`} color="#334155"/>
@@ -625,21 +793,38 @@ const MODES = [
 ];
 
 export default function App() {
-  const [inp, setInp] = useState({hp:2, volts:240, phase:1, hrs:6, sun:5.5, days:2, sv:48, chem:'lfp'});
+  const [inp, setInp] = useState({hp:2, volts:240, phase:1, hrs:6, sun:5.5, days:2, sv:48});
   const [mode, setMode] = useState('day_pump');
-  const upd  = (k, v) => setInp(p => ({...p, [k]:v}));
-  const calc = useMemo(() => calcSys(inp), [inp]);
+  const [panelId, setPanelId] = useState('jinko_400');
+  const [customPanel, setCustomPanel] = useState({Pmax:400, Voc:48.6, Vmp:40.5, Isc:9.87, Imp:9.38});
+  const [batteryId, setBatteryId] = useState('pylontech');
+  const [customBattery, setCustomBattery] = useState({kWh:5.12, dod:0.80, chem:'lfp'});
+  const [scenario, setScenario] = useState('normal');
+
+  const upd = (k, v) => setInp(p => ({...p, [k]:v}));
+
+  const activePanel   = panelId   === 'custom' ? customPanel   : PANELS.find(p => p.id === panelId);
+  const activeBattery = batteryId === 'custom' ? customBattery : BATTERIES.find(b => b.id === batteryId);
+
+  const calc = useMemo(() => calcSys({...inp,
+    panel:   activePanel   || PANELS[0],
+    battery: activeBattery || BATTERIES[0],
+  }), [inp, activePanel, activeBattery]);
 
   const disp = useMemo(() => {
     const {pvU, dcU, bU, acU, mU} = calc;
+    const gridDown = scenario === 'grid_failure';
     switch(mode) {
-      case 'day_pump':   return {pvU, dcU, bU: bU * 0.30, acU, mU};
-      case 'night_pump': return {pvU: 0, dcU: 0, bU, acU, mU};
-      case 'day_idle':   return {pvU: pvU * 0.72, dcU: dcU * 0.72, bU: bU * 0.14, acU: 0, mU: 0};
-      case 'night_idle': return {pvU: 0, dcU: 0, bU: 0, acU: 0, mU: 0};
-      default:           return {pvU, dcU, bU, acU, mU};
+      case 'day_pump':   return {pvU, dcU, bU: bU*(gridDown?0.55:0.30), acU, mU, gridDown};
+      case 'night_pump': return {pvU:0, dcU:0, bU: bU*(gridDown?1.0:0.85), acU, mU, gridDown};
+      case 'day_idle':   return {pvU:pvU*0.72, dcU:dcU*0.72, bU:bU*(gridDown?0.20:0.14), acU:0, mU:0, gridDown};
+      case 'night_idle': return {pvU:0, dcU:0, bU:bU*(gridDown?0.08:0), acU:0, mU:0, gridDown};
+      default:           return {pvU, dcU, bU, acU, mU, gridDown};
     }
-  }, [calc, mode]);
+  }, [calc, mode, scenario]);
+
+  const panelName   = panelId   === 'custom' ? 'Custom Panel'   : (activePanel?.name   || '');
+  const batteryName = batteryId === 'custom' ? 'Custom Battery' : (activeBattery?.name || '');
 
   const btnStyle = k => ({
     background:   mode===k ? '#1e3a5f' : '#ffffff',
@@ -672,16 +857,16 @@ export default function App() {
       <div style={{background:'#f0f4f8', color:'#1e293b', height:'100vh', display:'flex',
                    flexDirection:'column', fontFamily:"'Space Mono','Courier New',monospace", overflow:'hidden'}}>
 
-        {/* ── Header (dark navy for contrast) ── */}
+        {/* Header */}
         <div style={{background:'#1e3a5f', borderBottom:'2px solid #1e40af', padding:'8px 16px',
                      display:'flex', alignItems:'center', gap:14, flexShrink:0,
                      boxShadow:'0 2px 8px rgba(0,0,0,0.18)'}}>
           <div>
             <div style={{fontSize:13, color:'#ffffff', fontWeight:'bold', letterSpacing:3}}>
-              ⚡ MICROGRID DESIGNER
+              &#9889; MICROGRID DESIGNER
             </div>
             <div style={{fontSize:7.5, color:'#93c5fd', letterSpacing:2, marginTop:1}}>
-              SOLAR · BATTERY · INVERTER · WELL PUMP — NEC 690 / 480 / 430 COMPLIANT SIZING
+              SOLAR \xb7 BATTERY \xb7 INVERTER \xb7 WELL PUMP — NEC 690 / 480 / 430 COMPLIANT SIZING
             </div>
           </div>
 
@@ -699,6 +884,27 @@ export default function App() {
             </div>
           ))}
 
+          {/* Scenario toggle */}
+          <button
+            onClick={() => setScenario(s => s==='normal' ? 'grid_failure' : 'normal')}
+            style={{
+              background: scenario==='grid_failure' ? '#7f1d1d' : '#064e3b',
+              border: `2px solid ${scenario==='grid_failure' ? '#dc2626' : '#16a34a'}`,
+              color: scenario==='grid_failure' ? '#fca5a5' : '#6ee7b7',
+              padding: '5px 14px',
+              borderRadius: 5,
+              cursor: 'pointer',
+              fontSize: 9,
+              fontFamily: 'inherit',
+              letterSpacing: 1,
+              fontWeight: 'bold',
+              transition: 'all 0.2s',
+              minWidth: 130,
+            }}
+          >
+            {scenario==='grid_failure' ? '&#9889; GRID FAILURE' : '✓ GRID CONNECTED'}
+          </button>
+
           <div style={{flex:1}}/>
 
           {/* Mode selector */}
@@ -712,13 +918,20 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── Main 3-col layout ── */}
+        {/* Main 3-col layout */}
         <div style={{flex:1, display:'grid', gridTemplateColumns:'240px 1fr 296px', overflow:'hidden'}}>
 
           {/* Left: Inputs */}
           <div style={{background:'#ffffff', borderRight:'1px solid #e2e8f0', overflowY:'auto',
                        boxShadow:'2px 0 4px rgba(0,0,0,0.04)'}}>
-            <InputPanel inp={inp} upd={upd}/>
+            <InputPanel
+              inp={inp} upd={upd}
+              panelId={panelId} setPanelId={setPanelId}
+              customPanel={customPanel} setCustomPanel={setCustomPanel}
+              batteryId={batteryId} setBatteryId={setBatteryId}
+              customBattery={customBattery} setCustomBattery={setCustomBattery}
+              activePanel={activePanel} activeBattery={activeBattery}
+            />
           </div>
 
           {/* Center: Diagram */}
@@ -726,14 +939,14 @@ export default function App() {
                        alignItems:'center', padding:'14px 8px', gap:6, background:'#f0f4f8'}}>
             <OneDiagram calc={calc} disp={disp} inp={inp}/>
             <div style={{fontSize:7.5, color:'#94a3b8', textAlign:'center', paddingBottom:8}}>
-              All wire sizes: copper THWN-2 at 75°C in conduit · Minimum design values · Verify with licensed electrician / AHJ
+              All wire sizes: copper THWN-2 at 75\xb0C in conduit \xb7 Minimum design values \xb7 Verify with licensed electrician / AHJ
             </div>
           </div>
 
           {/* Right: Specs */}
           <div style={{background:'#f8fafc', borderLeft:'1px solid #e2e8f0', overflowY:'auto',
                        boxShadow:'-2px 0 4px rgba(0,0,0,0.04)'}}>
-            <SpecsPanel calc={calc} inp={inp}/>
+            <SpecsPanel calc={calc} inp={inp} panelName={panelName} batteryName={batteryName}/>
           </div>
 
         </div>
